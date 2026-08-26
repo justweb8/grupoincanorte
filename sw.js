@@ -1,7 +1,8 @@
-const CACHE_NAME = 'controlobras-v1';
+const CACHE_NAME = 'controlobras-v2';
 const APP_SHELL = [
   './index.html',
   './manifest.json',
+  './logo-full.png',
   './icon-192.png',
   './icon-512.png',
   './icon-maskable-512.png',
