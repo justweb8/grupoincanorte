@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ControlObras — Gestión de Insumos por Proyecto</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';</script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    * { font-family: 'Inter', sans-serif; }
+    .badge-falla     { background:#fee2e2; color:#991b1b; }
+    .badge-ok        { background:#d1fae5; color:#065f46; }
+    .badge-pendiente { background:#fef3c7; color:#92400e; }
+    .card-proyecto   { transition: all .18s; cursor:pointer; }
+    .card-proyecto:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.10); }
+    .vista { display:none; }
+    .vista.activa { display:block; }
+    .progress-bar { transition: width .5s cubic-bezier(.4,0,.2,1); }
+    ::-webkit-scrollbar { width:6px; height:6px; }
+    ::-webkit-scrollbar-track { background:#f1f5f9; }
+    ::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:3px; }
+    .toast { position:fixed; bottom:24px; right:24px; z-index:9999; padding:10px 18px;
+             border-radius:10px; font-size:13px; font-weight:600; color:#fff;
+             box-shadow:0 4px 16px rgba(0,0,0,.18); opacity:0; transition:opacity .3s;
+             pointer-events:none; }
+    .toast.show { opacity:1; }
+    .toast.ok  { background:#059669; }
+    .toast.err { background:#dc2626; }
+    .toast.inf { background:#4f46e5; }
+    #loadingOverlay { position:fixed;inset:0;background:rgba(255,255,255,.75);
+      backdrop-filter:blur(2px);z-index:9000;display:none;
+      align-items:center;justify-content:center;flex-direction:column;gap:12px; }
+    #loadingOverlay.show { display:flex; }
+    .spinner { width:36px;height:36px;border:4px solid #e0e7ff;
+               border-top-color:#4f46e5;border-radius:50%;animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+<!-- Loading overlay -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <span class="text-sm font-semibold text-indigo-700" id="loadingMsg">Cargando...</span>
+</div>
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
+    <button onclick="irAProyectos()" class="flex items-center gap-2 group">
+      <span class="text-2xl">🏗️</span>
+      <div>
+        <span class="text-sm font-extrabold text-slate-800 tracking-tight group-hover:text-indigo-700 transition">ControlObras</span>
+        <span id="breadProyecto" class="hidden text-slate-400 text-sm font-medium"> / <span id="breadNombre" class="text-indigo-700 font-semibold"></span></span>
+      </div>
+    </button>
+    <div class="flex items-center gap-2">
+      <!-- Indicador Supabase -->
+      <span id="dbStatus" class="hidden text-[11px] font-semibold px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">☁ Supabase</span>
+      <button id="btnExportarExcel" onclick="exportarExcel()" class="hidden bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition shadow-sm">📊 Excel</button>
+      <button onclick="irAProyectos()" id="btnVolver" class="hidden bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg transition">← Proyectos</button>
+      <button onclick="abrirModalProyecto()" class="bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-semibold px-3 py-2 rounded-lg transition shadow-sm">+ Nuevo Proyecto</button>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════ VISTA: PROYECTOS ═══════════════ -->
+<div id="vistaProyectos" class="vista activa max-w-7xl mx-auto px-4 py-8">
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+      <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Proyectos</div>
+      <div class="text-3xl font-extrabold text-slate-800 mt-1" id="kpiProyectos">0</div>
+    </div>
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+      <div class="text-xs font-semibold text-amber-600 uppercase tracking-wide">Total Insumos</div>
+      <div class="text-3xl font-extrabold text-amber-600 mt-1" id="kpiInsumosTotal">0</div>
+    </div>
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+      <div class="text-xs font-semibold text-emerald-600 uppercase tracking-wide">Completados</div>
+      <div class="text-3xl font-extrabold text-emerald-600 mt-1" id="kpiCompletadosTotal">0</div>
+    </div>
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+      <div class="text-xs font-semibold text-rose-600 uppercase tracking-wide">En Exceso</div>
+      <div class="text-3xl font-extrabold text-rose-600 mt-1" id="kpiExcesosTotal">0</div>
+    </div>
+  </div>
+  <div class="flex justify-between items-center mb-4">
+    <h2 class="text-lg font-bold text-slate-700">Mis Proyectos</h2>
+    <input type="text" id="searchProyecto" placeholder="🔍 Buscar proyecto..." class="text-xs border border-slate-300 rounded-lg px-3 py-2 bg-white w-56" oninput="renderProyectos()">
+  </div>
+  <div id="gridProyectos" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+  <div id="emptyProyectos" class="hidden text-center py-20">
+    <div class="text-6xl mb-4">📂</div>
+    <h3 class="text-xl font-bold text-slate-600 mb-2">Sin proyectos todavía</h3>
+    <p class="text-sm text-slate-400 mb-5">Crea tu primer proyecto y sube el PDF de insumos del S10.</p>
+    <button onclick="abrirModalProyecto()" class="bg-indigo-700 hover:bg-indigo-800 text-white font-semibold px-5 py-2.5 rounded-lg transition text-sm">+ Crear primer proyecto</button>
+  </div>
+</div>
+
+<!-- ═══════════════ VISTA: INSUMOS ═══════════════ -->
+<div id="vistaInsumos" class="vista max-w-7xl mx-auto px-4 py-8 space-y-6">
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+    <div class="flex flex-col sm:flex-row justify-between gap-4">
+      <div>
+        <h2 class="text-xl font-extrabold text-slate-800" id="proyectoTitulo">—</h2>
+        <p class="text-xs text-slate-500 mt-0.5" id="proyectoMeta">—</p>
+      </div>
+      <div class="flex gap-3 flex-wrap">
+        <div class="text-center px-3"><div class="text-xs font-semibold text-slate-500 uppercase">Total</div><div class="text-2xl font-extrabold text-slate-800" id="kpiTotal">0</div></div>
+        <div class="text-center px-3 border-l border-slate-100"><div class="text-xs font-semibold text-amber-600 uppercase">Pendientes</div><div class="text-2xl font-extrabold text-amber-600" id="kpiPendientes">0</div></div>
+        <div class="text-center px-3 border-l border-slate-100"><div class="text-xs font-semibold text-emerald-600 uppercase">Completados</div><div class="text-2xl font-extrabold text-emerald-600" id="kpiCompletados">0</div></div>
+        <div class="text-center px-3 border-l border-slate-100"><div class="text-xs font-semibold text-rose-600 uppercase">En Exceso</div><div class="text-2xl font-extrabold text-rose-600" id="kpiExcesos">0</div></div>
+      </div>
+    </div>
+    <div class="mt-4">
+      <div class="flex justify-between text-xs text-slate-500 mb-1"><span>Avance de despachos</span><span id="pctProgreso">0%</span></div>
+      <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+        <div id="barraProgreso" class="progress-bar h-2 bg-indigo-500 rounded-full" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+    <div class="lg:col-span-2 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+      <h3 class="text-sm font-bold text-slate-800 mb-1">📄 Cargar PDF de Insumos (S10)</h3>
+      <p class="text-xs text-slate-400 mb-3">Sube el reporte S10 del expediente técnico de este proyecto.</p>
+      <input type="file" id="pdfInput" accept="application/pdf" class="hidden" onchange="procesarPDF(event)">
+      <label for="pdfInput" class="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/30 hover:bg-indigo-50 rounded-xl p-5 flex flex-col items-center cursor-pointer transition">
+        <span class="text-3xl mb-1">📤</span>
+        <span class="text-sm font-semibold text-indigo-700">Seleccionar PDF</span>
+        <span class="text-xs text-slate-400 mt-0.5">Extrae códigos, unidades y cantidades automáticamente</span>
+      </label>
+      <div id="statusPdf" class="mt-2 text-xs font-semibold text-indigo-600 min-h-[18px]"></div>
+      <details class="mt-2">
+        <summary class="text-xs text-slate-400 cursor-pointer hover:text-slate-600">Ver log de extracción</summary>
+        <pre id="logPdf" class="mt-2 text-[10px] bg-slate-50 border border-slate-200 rounded p-2 max-h-36 overflow-y-auto text-slate-500 whitespace-pre-wrap"></pre>
+      </details>
+    </div>
+    <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+      <h3 class="text-sm font-bold text-slate-800 mb-1">📏 Conversor Acero</h3>
+      <p class="text-xs text-slate-400 mb-3">kg → varillas de 9 m</p>
+      <div class="space-y-2 text-xs">
+        <div>
+          <label class="font-semibold text-slate-600">Diámetro:</label>
+          <select id="calcDiametro" class="w-full border border-slate-300 rounded-lg p-2 mt-1 bg-white text-slate-700" onchange="calcularAcero()">
+            <option value="0.222">6 mm — 0.222 kg/m</option>
+            <option value="0.395">8 mm — 0.395 kg/m</option>
+            <option value="0.560">3/8" — 0.560 kg/m</option>
+            <option value="0.888">12 mm — 0.888 kg/m</option>
+            <option value="0.994" selected>1/2" — 0.994 kg/m</option>
+            <option value="1.552">5/8" — 1.552 kg/m</option>
+            <option value="2.235">3/4" — 2.235 kg/m</option>
+            <option value="3.973">1" — 3.973 kg/m</option>
+          </select>
+        </div>
+        <div>
+          <label class="font-semibold text-slate-600">Kilogramos:</label>
+          <input type="number" id="calcKg" value="8939.94" step="0.01" class="w-full border border-slate-300 rounded-lg p-2 mt-1 font-bold text-slate-800" oninput="calcularAcero()">
+        </div>
+        <div class="p-3 bg-indigo-50 border border-indigo-100 rounded-lg space-y-1 mt-2">
+          <div class="flex justify-between text-indigo-800"><span>Peso varilla 9m:</span><span id="resPesoVarilla" class="font-bold">8.946 kg</span></div>
+          <div class="flex justify-between font-extrabold text-indigo-700 pt-1 border-t border-indigo-200 text-sm"><span>Varillas:</span><span id="resVarillas">999</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+    <div class="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row justify-between gap-3 items-center">
+      <h3 class="text-sm font-bold text-slate-800">📋 Insumos del Proyecto</h3>
+      <div class="flex gap-2 w-full sm:w-auto">
+        <input type="text" id="searchInsumo" placeholder="🔍 Código o descripción..." class="text-xs border border-slate-300 rounded-lg px-3 py-2 w-full sm:w-60 bg-white" oninput="renderTabla()">
+        <select id="filterEstado" class="text-xs border border-slate-300 rounded-lg px-2 py-2 bg-white" onchange="renderTabla()">
+          <option value="TODOS">Todos</option>
+          <option value="PENDIENTE">Pendientes</option>
+          <option value="COMPLETADO">Completados</option>
+          <option value="EXCESO">En Exceso</option>
+        </select>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead>
+          <tr class="bg-slate-100 text-slate-500 uppercase tracking-wide font-semibold border-b border-slate-200">
+            <th class="p-3">Código</th><th class="p-3">Descripción</th><th class="p-3">Und</th>
+            <th class="p-3 text-right">Presup.</th><th class="p-3 text-right">Enviado</th>
+            <th class="p-3 text-right">Saldo</th><th class="p-3 text-center">Estado</th><th class="p-3 text-center">Acción</th>
+          </tr>
+        </thead>
+        <tbody id="tablaInsumos" class="divide-y divide-slate-100"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Proyecto -->
+<div id="modalProyecto" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+    <div class="flex justify-between items-center border-b pb-3">
+      <h3 class="text-base font-bold text-slate-800" id="modalProyectoTitulo">Nuevo Proyecto</h3>
+      <button onclick="cerrarModalProyecto()" class="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none">&times;</button>
+    </div>
+    <input type="hidden" id="editProyectoId">
+    <div class="space-y-3">
+      <div><label class="text-xs font-semibold text-slate-600">Nombre del Proyecto *</label>
+        <input type="text" id="inputNombreProyecto" placeholder="Ej: Obra Jaén — Movilidad Urbana" class="w-full border border-slate-300 rounded-lg p-2.5 mt-1 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+      <div><label class="text-xs font-semibold text-slate-600">Código de Obra / Expediente</label>
+        <input type="text" id="inputCodigoProyecto" placeholder="Ej: CIP-448011" class="w-full border border-slate-300 rounded-lg p-2.5 mt-1 text-sm"></div>
+      <div><label class="text-xs font-semibold text-slate-600">Ubicación</label>
+        <input type="text" id="inputUbicacionProyecto" placeholder="Ej: Jaén, Cajamarca" class="w-full border border-slate-300 rounded-lg p-2.5 mt-1 text-sm"></div>
+      <div><label class="text-xs font-semibold text-slate-600">Descripción / Notas</label>
+        <textarea id="inputDescProyecto" rows="2" placeholder="Opcional..." class="w-full border border-slate-300 rounded-lg p-2.5 mt-1 text-sm resize-none"></textarea></div>
+    </div>
+    <div class="flex justify-between items-center pt-3 border-t border-slate-100">
+      <button id="btnEliminarProyecto" onclick="eliminarProyectoActual()" class="hidden text-xs text-rose-500 hover:text-rose-700 font-semibold">🗑 Eliminar proyecto</button>
+      <div class="flex gap-2 ml-auto">
+        <button onclick="cerrarModalProyecto()" class="px-4 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg">Cancelar</button>
+        <button onclick="guardarProyecto()" class="px-4 py-2 text-xs font-semibold bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg shadow">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Despacho -->
+<div id="modalEnvio" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
+    <div class="flex justify-between items-center border-b pb-3">
+      <h3 class="text-base font-bold text-slate-800">Registrar Despacho</h3>
+      <button onclick="cerrarModal()" class="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none">&times;</button>
+    </div>
+    <p class="text-xs font-semibold text-indigo-700 bg-indigo-50 p-2.5 rounded-lg border border-indigo-100" id="modalSubtitulo"></p>
+    <input type="hidden" id="insumoIdModal">
+    <div class="space-y-3">
+      <div><label class="text-xs font-semibold text-slate-600">Cantidad Enviada</label>
+        <input type="number" step="0.0001" id="cantidadModal" placeholder="Ej: 60" class="w-full text-sm border border-slate-300 rounded-lg p-2.5 mt-1 font-bold focus:ring-2 focus:ring-indigo-500 outline-none"></div>
+      <div><label class="text-xs font-semibold text-slate-600">N° Guía / Remisión</label>
+        <input type="text" id="guiaModal" placeholder="Ej: G-00123" class="w-full text-xs border border-slate-300 rounded-lg p-2.5 mt-1"></div>
+      <div><label class="text-xs font-semibold text-slate-600">Observación / Conductor</label>
+        <input type="text" id="obsModal" placeholder="Ej: Enviado en camión volquete" class="w-full text-xs border border-slate-300 rounded-lg p-2.5 mt-1"></div>
+    </div>
+    <div class="flex justify-end gap-2 pt-3 border-t border-slate-100">
+      <button onclick="cerrarModal()" class="px-4 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg">Cancelar</button>
+      <button onclick="guardarEnvio()" class="px-4 py-2 text-xs font-semibold bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg shadow">Guardar Despacho</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  SUPABASE CONFIG
+// ══════════════════════════════════════════════════════════════
+const SB_URL  = 'https://cyojgbrnzoxwwmeyueqh.supabase.co';
+const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5b2pnYnJuem94d3dtZXl1ZXFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2OTkwMzIsImV4cCI6MjEwMzI3NTAzMn0.b7TBXBUHZ7sBXaTrmzHfrUC2HE4o_3BVE_E8e6bGSaQ';
+
+const headers = {
+  'Content-Type': 'application/json',
+  'apikey': SB_KEY,
+  'Authorization': `Bearer ${SB_KEY}`,
+  'Prefer': 'return=representation'
+};
+
+// Helper fetch con manejo de errores
+async function sbFetch(path, opts = {}) {
+  const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
+    headers: { ...headers, ...(opts.headers || {}) },
+    ...opts
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Supabase [${res.status}]: ${err}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : [];
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ESTADO EN MEMORIA (caché local)
+// ══════════════════════════════════════════════════════════════
+let proyectos = [];
+let proyectoActualId = null;
+const proyectoActual = () => proyectos.find(p => p.id === proyectoActualId);
+
+// ══════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ══════════════════════════════════════════════════════════════
+function showLoading(msg = 'Guardando...') {
+  document.getElementById('loadingMsg').innerText = msg;
+  document.getElementById('loadingOverlay').classList.add('show');
+}
+function hideLoading() { document.getElementById('loadingOverlay').classList.remove('show'); }
+
+let toastTimer;
+function toast(msg, tipo = 'ok') {
+  const el = document.getElementById('toast');
+  el.className = `toast ${tipo} show`;
+  el.innerText = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SUPABASE — OPERACIONES
+// ══════════════════════════════════════════════════════════════
+
+// ── PROYECTOS ────────────────────────────────────────────────
+async function cargarProyectosDeSB() {
+  const rows = await sbFetch('proyectos?select=*&order=creado_en.asc');
+  // Para cada proyecto cargamos sus insumos
+  const todos = await Promise.all(rows.map(async row => {
+    const insumos = await cargarInsumosDeSB(row.id);
+    return {
+      id:         row.id,
+      nombre:     row.nombre,
+      codigo:     row.codigo || '',
+      ubicacion:  row.ubicacion || '',
+      descripcion:row.descripcion || '',
+      creadoEn:   new Date(row.creado_en).getTime(),
+      insumos
+    };
+  }));
+  proyectos = todos;
+}
+
+async function crearProyectoEnSB(datos) {
+  const rows = await sbFetch('proyectos', {
+    method: 'POST',
+    body: JSON.stringify({
+      nombre:      datos.nombre,
+      codigo:      datos.codigo || null,
+      ubicacion:   datos.ubicacion || null,
+      descripcion: datos.descripcion || null
+    })
+  });
+  return rows[0];
+}
+
+async function actualizarProyectoEnSB(id, datos) {
+  await sbFetch(`proyectos?id=eq.${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      nombre:      datos.nombre,
+      codigo:      datos.codigo || null,
+      ubicacion:   datos.ubicacion || null,
+      descripcion: datos.descripcion || null
+    })
+  });
+}
+
+async function eliminarProyectoEnSB(id) {
+  // CASCADE elimina insumos y despachos automáticamente
+  await sbFetch(`proyectos?id=eq.${id}`, { method: 'DELETE' });
+}
+
+// ── INSUMOS ──────────────────────────────────────────────────
+async function cargarInsumosDeSB(proyectoId) {
+  const rows = await sbFetch(`insumos?proyecto_id=eq.${proyectoId}&select=*&order=creado_en.asc`);
+  return rows.map(r => ({
+    id:            r.id,
+    codigo:        r.codigo,
+    descripcion:   r.descripcion,
+    unidad:        r.unidad,
+    presupuestado: parseFloat(r.presupuestado),
+    enviado:       parseFloat(r.enviado)
+  }));
+}
+
+async function insertarInsumosEnSB(proyectoId, insumos) {
+  // Primero eliminar los existentes
+  await sbFetch(`insumos?proyecto_id=eq.${proyectoId}`, { method: 'DELETE' });
+  // Insertar en lotes de 200
+  const lote = 200;
+  for (let i = 0; i < insumos.length; i += lote) {
+    const batch = insumos.slice(i, i + lote).map(ins => ({
+      proyecto_id:   proyectoId,
+      codigo:        ins.codigo,
+      descripcion:   ins.descripcion,
+      unidad:        ins.unidad,
+      presupuestado: ins.presupuestado,
+      enviado:       0
+    }));
+    await sbFetch('insumos', { method: 'POST', body: JSON.stringify(batch) });
+  }
+}
+
+// ── DESPACHOS ────────────────────────────────────────────────
+async function registrarDespachoEnSB(insumoId, cantidad, guia, observacion) {
+  // 1) Insertar despacho en tabla despachos
+  await sbFetch('despachos', {
+    method: 'POST',
+    body: JSON.stringify({ insumo_id: insumoId, cantidad, guia: guia||null, observacion: observacion||null })
+  });
+  // 2) Actualizar campo enviado en insumos (suma acumulada)
+  //    Usamos RPC o recalculamos desde despachos
+  const despachos = await sbFetch(`despachos?insumo_id=eq.${insumoId}&select=cantidad`);
+  const totalEnviado = despachos.reduce((s, d) => s + parseFloat(d.cantidad), 0);
+  await sbFetch(`insumos?id=eq.${insumoId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enviado: totalEnviado })
+  });
+  return totalEnviado;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  NAVEGACIÓN
+// ══════════════════════════════════════════════════════════════
+function irAProyectos() {
+  proyectoActualId = null;
+  document.getElementById('vistaProyectos').classList.add('activa');
+  document.getElementById('vistaInsumos').classList.remove('activa');
+  document.getElementById('breadProyecto').classList.add('hidden');
+  document.getElementById('btnVolver').classList.add('hidden');
+  document.getElementById('btnExportarExcel').classList.add('hidden');
+  renderProyectos();
+}
+
+async function irAInsumos(id) {
+  proyectoActualId = id;
+  const p = proyectoActual();
+  document.getElementById('vistaProyectos').classList.remove('activa');
+  document.getElementById('vistaInsumos').classList.add('activa');
+  document.getElementById('breadProyecto').classList.remove('hidden');
+  document.getElementById('breadNombre').innerText = p.nombre;
+  document.getElementById('btnVolver').classList.remove('hidden');
+  document.getElementById('btnExportarExcel').classList.remove('hidden');
+  document.getElementById('proyectoTitulo').innerText = p.nombre;
+  document.getElementById('proyectoMeta').innerText =
+    [p.codigo, p.ubicacion, p.descripcion].filter(Boolean).join(' · ') || 'Sin datos adicionales';
+  document.getElementById('statusPdf').innerText = '';
+  document.getElementById('logPdf').innerText = '';
+  document.getElementById('searchInsumo').value = '';
+  document.getElementById('filterEstado').value = 'TODOS';
+
+  // Recargar insumos frescos desde Supabase
+  showLoading('Cargando insumos...');
+  try {
+    p.insumos = await cargarInsumosDeSB(id);
+  } catch(e) { toast('Error al cargar insumos: '+e.message,'err'); }
+  hideLoading();
+  calcularAcero();
+  renderTabla();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PROYECTOS — RENDER
+// ══════════════════════════════════════════════════════════════
+function renderProyectos() {
+  const q     = document.getElementById('searchProyecto').value.toLowerCase();
+  const grid  = document.getElementById('gridProyectos');
+  const empty = document.getElementById('emptyProyectos');
+  const filtrados = proyectos.filter(p =>
+    p.nombre.toLowerCase().includes(q) ||
+    (p.codigo||'').toLowerCase().includes(q) ||
+    (p.ubicacion||'').toLowerCase().includes(q)
+  );
+  let totalIns=0, totalComp=0, totalExc=0;
+  proyectos.forEach(p => p.insumos.forEach(i => {
+    const s = i.presupuestado - i.enviado;
+    totalIns++;
+    if (s === 0) totalComp++;
+    if (s < 0)  totalExc++;
+  }));
+  document.getElementById('kpiProyectos').innerText      = proyectos.length;
+  document.getElementById('kpiInsumosTotal').innerText   = totalIns;
+  document.getElementById('kpiCompletadosTotal').innerText = totalComp;
+  document.getElementById('kpiExcesosTotal').innerText   = totalExc;
+
+  if (filtrados.length === 0) {
+    grid.classList.add('hidden'); empty.classList.remove('hidden'); return;
+  }
+  grid.classList.remove('hidden'); empty.classList.add('hidden');
+  grid.innerHTML = filtrados.map(p => {
+    const total = p.insumos.length;
+    const comp  = p.insumos.filter(i => (i.presupuestado-i.enviado) <= 0).length;
+    const pct   = total > 0 ? Math.round((comp/total)*100) : 0;
+    const pend  = p.insumos.filter(i => (i.presupuestado-i.enviado) > 0).length;
+    const exc   = p.insumos.filter(i => (i.presupuestado-i.enviado) < 0).length;
+    const fecha = new Date(p.creadoEn).toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric'});
+    const color = pct>=100?'bg-emerald-400':pct>50?'bg-indigo-400':'bg-amber-400';
+    return `
+    <div class="card-proyecto bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden" onclick="irAInsumos('${p.id}')">
+      <div class="h-1.5 ${color}"></div>
+      <div class="p-5">
+        <div class="flex justify-between items-start mb-3">
+          <div class="flex-1 min-w-0 pr-2">
+            <h3 class="text-base font-bold text-slate-800 truncate">${p.nombre}</h3>
+            <p class="text-xs text-slate-400 mt-0.5 truncate">${[p.codigo,p.ubicacion].filter(Boolean).join(' · ')||'Sin código / ubicación'}</p>
+          </div>
+          <button onclick="event.stopPropagation();abrirEditarProyecto('${p.id}')"
+            class="text-slate-300 hover:text-indigo-500 transition p-1 rounded-lg hover:bg-indigo-50 text-lg leading-none flex-shrink-0">✏️</button>
+        </div>
+        <div class="mb-3">
+          <div class="flex justify-between text-[11px] text-slate-500 mb-1">
+            <span>${total} insumos</span>
+            <span class="font-bold ${pct>=100?'text-emerald-600':'text-indigo-600'}">${pct}% despachado</span>
+          </div>
+          <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+            <div class="h-1.5 rounded-full progress-bar ${color}" style="width:${pct}%"></div>
+          </div>
+        </div>
+        <div class="flex gap-3 text-[11px]">
+          <span class="text-amber-600 font-semibold">⏳ ${pend} pend.</span>
+          <span class="text-emerald-600 font-semibold">✅ ${comp} compl.</span>
+          ${exc>0?`<span class="text-rose-500 font-semibold">⚠️ ${exc} exc.</span>`:''}
+          ${total===0?`<span class="text-slate-400">Sin insumos — sube un PDF</span>`:''}
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-100 text-[11px] text-slate-400">Creado ${fecha}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PROYECTOS — CRUD con Supabase
+// ══════════════════════════════════════════════════════════════
+let editandoProyectoId = null;
+
+function abrirModalProyecto() {
+  editandoProyectoId = null;
+  document.getElementById('modalProyectoTitulo').innerText = 'Nuevo Proyecto';
+  document.getElementById('editProyectoId').value = '';
+  ['inputNombreProyecto','inputCodigoProyecto','inputUbicacionProyecto','inputDescProyecto']
+    .forEach(id => document.getElementById(id).value = '');
+  document.getElementById('btnEliminarProyecto').classList.add('hidden');
+  const m = document.getElementById('modalProyecto');
+  m.classList.remove('hidden'); m.classList.add('flex');
+  setTimeout(() => document.getElementById('inputNombreProyecto').focus(), 80);
+}
+
+function abrirEditarProyecto(id) {
+  const p = proyectos.find(x => x.id === id);
+  if (!p) return;
+  editandoProyectoId = id;
+  document.getElementById('modalProyectoTitulo').innerText = 'Editar Proyecto';
+  document.getElementById('editProyectoId').value = id;
+  document.getElementById('inputNombreProyecto').value  = p.nombre;
+  document.getElementById('inputCodigoProyecto').value  = p.codigo || '';
+  document.getElementById('inputUbicacionProyecto').value = p.ubicacion || '';
+  document.getElementById('inputDescProyecto').value    = p.descripcion || '';
+  document.getElementById('btnEliminarProyecto').classList.remove('hidden');
+  const m = document.getElementById('modalProyecto');
+  m.classList.remove('hidden'); m.classList.add('flex');
+}
+
+function cerrarModalProyecto() {
+  const m = document.getElementById('modalProyecto');
+  m.classList.add('hidden'); m.classList.remove('flex');
+}
+
+async function guardarProyecto() {
+  const nombre = document.getElementById('inputNombreProyecto').value.trim();
+  if (!nombre) { alert('El nombre del proyecto es obligatorio.'); return; }
+  const datos = {
+    nombre,
+    codigo:      document.getElementById('inputCodigoProyecto').value.trim(),
+    ubicacion:   document.getElementById('inputUbicacionProyecto').value.trim(),
+    descripcion: document.getElementById('inputDescProyecto').value.trim()
+  };
+  showLoading(editandoProyectoId ? 'Actualizando proyecto...' : 'Creando proyecto...');
+  try {
+    if (editandoProyectoId) {
+      await actualizarProyectoEnSB(editandoProyectoId, datos);
+      const p = proyectos.find(x => x.id === editandoProyectoId);
+      if (p) Object.assign(p, datos);
+      toast('Proyecto actualizado ✓');
+    } else {
+      const row = await crearProyectoEnSB(datos);
+      proyectos.push({ ...datos, id: row.id, creadoEn: new Date(row.creado_en).getTime(), insumos: [] });
+      toast('Proyecto creado ✓');
+    }
+    cerrarModalProyecto();
+    renderProyectos();
+  } catch(e) { toast('Error: '+e.message,'err'); }
+  hideLoading();
+}
+
+async function eliminarProyectoActual() {
+  if (!editandoProyectoId) return;
+  const p = proyectos.find(x => x.id === editandoProyectoId);
+  if (!p) return;
+  if (!confirm(`¿Eliminar "${p.nombre}" y todos sus insumos? Esto no se puede deshacer.`)) return;
+  showLoading('Eliminando proyecto...');
+  try {
+    await eliminarProyectoEnSB(editandoProyectoId);
+    proyectos = proyectos.filter(x => x.id !== editandoProyectoId);
+    cerrarModalProyecto();
+    if (proyectoActualId === editandoProyectoId) irAProyectos();
+    else renderProyectos();
+    toast('Proyecto eliminado');
+  } catch(e) { toast('Error: '+e.message,'err'); }
+  hideLoading();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TABLA INSUMOS
+// ══════════════════════════════════════════════════════════════
+function renderTabla() {
+  const p       = proyectoActual();
+  const insumos = p ? p.insumos : [];
+  const busqueda= document.getElementById('searchInsumo').value.toLowerCase();
+  const filtro  = document.getElementById('filterEstado').value;
+  const tbody   = document.getElementById('tablaInsumos');
+  tbody.innerHTML = '';
+  let cTotal=0,cPend=0,cComp=0,cExc=0;
+  insumos.forEach(i => {
+    const s=i.presupuestado-i.enviado; cTotal++;
+    if(s>0) cPend++; else if(s===0) cComp++; else cExc++;
+  });
+  document.getElementById('kpiTotal').innerText       = cTotal;
+  document.getElementById('kpiPendientes').innerText  = cPend;
+  document.getElementById('kpiCompletados').innerText = cComp;
+  document.getElementById('kpiExcesos').innerText     = cExc;
+  const pct = cTotal>0?Math.round(((cComp+cExc)/cTotal)*100):0;
+  document.getElementById('pctProgreso').innerText    = pct+'%';
+  document.getElementById('barraProgreso').style.width= pct+'%';
+  const filtrados = insumos.filter(i => {
+    const s=i.presupuestado-i.enviado;
+    const estado=s>0?'PENDIENTE':s<0?'EXCESO':'COMPLETADO';
+    return (i.descripcion.toLowerCase().includes(busqueda)||i.codigo.toLowerCase().includes(busqueda))
+           && (filtro==='TODOS'||filtro===estado);
+  });
+  if (filtrados.length===0) {
+    tbody.innerHTML=`<tr><td colspan="8" class="text-center p-8 text-slate-400">${insumos.length===0?'Sin insumos. Sube un PDF para comenzar.':'No hay insumos con ese filtro.'}</td></tr>`;
+    return;
+  }
+  filtrados.forEach(i => {
+    const s=i.presupuestado-i.enviado;
+    const estado=s>0?'PENDIENTE':s<0?'EXCESO':'COMPLETADO';
+    let badge='';
+    if(estado==='PENDIENTE')  badge=`<span class="badge-pendiente font-bold px-2 py-0.5 rounded-full text-[10px]">Faltan ${s.toFixed(2)}</span>`;
+    if(estado==='COMPLETADO') badge=`<span class="badge-ok font-bold px-2 py-0.5 rounded-full text-[10px]">✓ Completado</span>`;
+    if(estado==='EXCESO')     badge=`<span class="badge-falla font-bold px-2 py-0.5 rounded-full text-[10px]">⚠ Exceso ${Math.abs(s).toFixed(2)}</span>`;
+    const tr=document.createElement('tr');
+    tr.className='hover:bg-slate-50 transition border-b border-slate-50';
+    tr.innerHTML=`
+      <td class="p-3 text-slate-400 font-mono text-[11px]">${i.codigo}</td>
+      <td class="p-3 font-semibold text-slate-800 max-w-[260px] truncate" title="${i.descripcion}">${i.descripcion}</td>
+      <td class="p-3 text-slate-500">${i.unidad}</td>
+      <td class="p-3 text-right text-slate-600 font-medium">${i.presupuestado.toLocaleString('es-PE',{minimumFractionDigits:4})}</td>
+      <td class="p-3 text-right font-bold text-indigo-700">${i.enviado.toLocaleString('es-PE',{minimumFractionDigits:4})}</td>
+      <td class="p-3 text-right font-bold ${s<0?'text-rose-600':'text-slate-700'}">${s.toFixed(4)}</td>
+      <td class="p-3 text-center">${badge}</td>
+      <td class="p-3 text-center">
+        <button onclick="abrirModal('${i.id}')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-2.5 py-1 rounded text-[11px] transition">+ Despachar</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODAL DESPACHO con Supabase
+// ══════════════════════════════════════════════════════════════
+function abrirModal(id) {
+  const p=proyectoActual();
+  const i=p&&p.insumos.find(x=>x.id===id);
+  if(!i) return;
+  document.getElementById('insumoIdModal').value=id;
+  document.getElementById('modalSubtitulo').innerText=`${i.descripcion} (${i.unidad}) — Saldo: ${(i.presupuestado-i.enviado).toFixed(4)}`;
+  document.getElementById('cantidadModal').value='';
+  document.getElementById('guiaModal').value='';
+  document.getElementById('obsModal').value='';
+  const m=document.getElementById('modalEnvio');
+  m.classList.remove('hidden'); m.classList.add('flex');
+  setTimeout(()=>document.getElementById('cantidadModal').focus(),80);
+}
+function cerrarModal() {
+  const m=document.getElementById('modalEnvio');
+  m.classList.add('hidden'); m.classList.remove('flex');
+}
+
+async function guardarEnvio() {
+  const id   = document.getElementById('insumoIdModal').value;
+  const cant = parseFloat(document.getElementById('cantidadModal').value)||0;
+  if(cant<=0){alert('Ingresa una cantidad mayor a 0.');return;}
+  const guia = document.getElementById('guiaModal').value.trim();
+  const obs  = document.getElementById('obsModal').value.trim();
+  const p    = proyectoActual();
+  const i    = p&&p.insumos.find(x=>x.id===id);
+  if(!i) return;
+  cerrarModal();
+  showLoading('Registrando despacho...');
+  try {
+    const totalEnviado = await registrarDespachoEnSB(id, cant, guia, obs);
+    i.enviado = totalEnviado;
+    renderTabla();
+    renderProyectos();
+    toast(`Despacho registrado ✓ (total enviado: ${totalEnviado.toFixed(4)} ${i.unidad})`);
+  } catch(e) { toast('Error al registrar: '+e.message,'err'); }
+  hideLoading();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  LECTOR PDF — Estrategia por columnas X del S10
+// ══════════════════════════════════════════════════════════════
+async function procesarPDF(e) {
+  const file=e.target.files[0];
+  if(!file) return;
+  const p=proyectoActual();
+  if(!p) return;
+  const status=document.getElementById('statusPdf');
+  const logEl=document.getElementById('logPdf');
+  status.innerText='⏳ Leyendo PDF...';
+  logEl.innerText='';
+  try {
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    let log=`Páginas: ${pdf.numPages}\n`;
+    const UNIDADES=new Set(['hh','hm','he','kg','m3','m2','m','p2','gal','und','pza','par','bol','glb','rll','pln','mll','mes','%mo','u']);
+    const cRx=/^\d{8,14}$/;
+    let allItems=[];
+    for(let pg=1;pg<=pdf.numPages;pg++){
+      const page=await pdf.getPage(pg);
+      const content=await page.getTextContent();
+      content.items.forEach(it=>{
+        const s=it.str.trim();
+        if(s) allItems.push({str:s,x:it.transform[4],y:Math.round(it.transform[5]),pg});
+      });
+    }
+    log+=`Tokens totales: ${allItems.length}\n`;
+    const xCodigos=allItems.filter(it=>cRx.test(it.str)).map(it=>it.x);
+    if(xCodigos.length===0){
+      logEl.innerText=log+'\n❌ No se encontraron códigos S10.';
+      status.innerText='❌ Sin códigos S10 encontrados.';
+      e.target.value=''; return;
+    }
+    xCodigos.sort((a,b)=>a-b);
+    const xCodigoMed=xCodigos[Math.floor(xCodigos.length/2)];
+    const xUnidades=allItems.filter(it=>UNIDADES.has(it.str.toLowerCase())).map(it=>it.x);
+    xUnidades.sort((a,b)=>a-b);
+    const xUnidadMed=xUnidades.length>0?xUnidades[Math.floor(xUnidades.length/2)]:xCodigoMed+220;
+    log+=`X código (mediana): ${xCodigoMed.toFixed(1)}\nX unidad (mediana): ${xUnidadMed.toFixed(1)}\n`;
+    const margenCod=60, margenDesc=10, margenUnd=30;
+    const esCodigo=it=>cRx.test(it.str)&&Math.abs(it.x-xCodigoMed)<margenCod;
+    const esUnidad=it=>UNIDADES.has(it.str.toLowerCase())&&it.x>(xUnidadMed-margenUnd)&&it.x<(xUnidadMed+margenUnd+30);
+    const esCant=it=>{const n=parseFloat(it.str.replace(/,/g,''));return !isNaN(n)&&n>0;};
+    const paginasSet=[...new Set(allItems.map(it=>it.pg))].sort((a,b)=>a-b);
+    const resultado=[]; let n=1;
+    for(const pg of paginasSet){
+      const itemsPg=allItems.filter(it=>it.pg===pg);
+      const filasPg=[];
+      const vistos=new Set();
+      const sortedY=[...new Set(itemsPg.map(it=>it.y))].sort((a,b)=>b-a);
+      for(const baseY of sortedY){
+        if(vistos.has(baseY)) continue;
+        const miembros=itemsPg.filter(it=>Math.abs(it.y-baseY)<=3);
+        miembros.forEach(it=>vistos.add(it.y));
+        filasPg.push(miembros.sort((a,b)=>a.x-b.x));
+      }
+      log+=`\nPág ${pg}: ${filasPg.length} filas\n`;
+      for(const fila of filasPg){
+        const codItem=fila.find(esCodigo);
+        if(!codItem) continue;
+        const xCodActual=codItem.x;
+        const descTokens=fila.filter(it=>it.x>xCodActual+5&&it.x<xUnidadMed-5&&!cRx.test(it.str)).map(it=>it.str);
+        const desc=descTokens.join(' ').trim();
+        if(desc.length<2) continue;
+        const undItem=fila.find(esUnidad);
+        if(!undItem) continue;
+        const cantItem=fila.filter(it=>it.x>undItem.x+5).find(esCant);
+        if(!cantItem) continue;
+        const cantidad=parseFloat(cantItem.str.replace(/,/g,''));
+        resultado.push({id:String(n++),codigo:codItem.str,descripcion:desc,unidad:undItem.str.toLowerCase(),presupuestado:cantidad,enviado:0});
+        log+=`  ✅ [${codItem.str}] ${desc} | ${undItem.str} | ${cantidad}\n`;
+      }
+    }
+    logEl.innerText=log;
+    if(resultado.length>0){
+      if(p.insumos.length>0){
+        if(!confirm(`El proyecto ya tiene ${p.insumos.length} insumos.\n¿Reemplazarlos con los ${resultado.length} extraídos del PDF?`)) return;
+      }
+      showLoading(`Guardando ${resultado.length} insumos en Supabase...`);
+      await insertarInsumosEnSB(p.id, resultado);
+      // Recargar con IDs reales de Supabase
+      p.insumos = await cargarInsumosDeSB(p.id);
+      hideLoading();
+      renderTabla();
+      renderProyectos();
+      status.innerText=`✅ ${p.insumos.length} insumos guardados en Supabase`;
+      toast(`${p.insumos.length} insumos guardados en la nube ☁`);
+    } else {
+      status.innerText='❌ No se encontraron insumos. Revisa el log.';
+    }
+  } catch(err){
+    hideLoading();
+    logEl.innerText=err.toString();
+    status.innerText='❌ Error: '+err.message;
+    toast('Error al procesar PDF: '+err.message,'err');
+  }
+  e.target.value='';
+}
+
+// ══════════════════════════════════════════════════════════════
+//  CALCULADORA ACERO
+// ══════════════════════════════════════════════════════════════
+function calcularAcero(){
+  const pm=parseFloat(document.getElementById('calcDiametro').value);
+  const kg=parseFloat(document.getElementById('calcKg').value)||0;
+  const pv=pm*9;
+  const v=kg>0?Math.ceil(kg/pv):0;
+  document.getElementById('resPesoVarilla').innerText=pv.toFixed(3)+' kg';
+  document.getElementById('resVarillas').innerText=v.toLocaleString()+' varillas';
+}
+
+// ══════════════════════════════════════════════════════════════
+//  EXPORTAR EXCEL
+// ══════════════════════════════════════════════════════════════
+function exportarExcel(){
+  const p=proyectoActual();
+  if(!p||p.insumos.length===0){alert('No hay insumos para exportar.');return;}
+  const data=p.insumos.map(i=>{
+    const s=i.presupuestado-i.enviado;
+    return{'Código':i.codigo,'Descripción':i.descripcion,'Unidad':i.unidad,
+           'Presupuestado':i.presupuestado,'Enviado a Obra':i.enviado,'Saldo':s,
+           'Estado':s<0?'EXCESO':s===0?'COMPLETADO':'PENDIENTE'};
+  });
+  const ws=XLSX.utils.json_to_sheet(data);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Insumos');
+  XLSX.writeFile(wb,`${p.nombre.replace(/\s+/g,'_')}_insumos.xlsx`);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  INIT — carga proyectos desde Supabase al arrancar
+// ══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', async () => {
+  showLoading('Conectando con Supabase...');
+  try {
+    await cargarProyectosDeSB();
+    document.getElementById('dbStatus').classList.remove('hidden');
+    toast('Conectado a Supabase ☁','inf');
+  } catch(e) {
+    toast('Sin conexión a Supabase — modo local','err');
+    console.error(e);
+  }
+  hideLoading();
+  irAProyectos();
+  calcularAcero();
+});
+</script>
+</body>
+</html>
